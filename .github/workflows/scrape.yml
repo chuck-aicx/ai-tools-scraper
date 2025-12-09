@@ -2,32 +2,103 @@ name: Scrape AI Tools
 
 on:
   schedule:
-    - cron: "0 3 * * 1"   # Monthly on day 1 at 03:00 UTC
+    - cron: "0 3 * * 1"   # Runs every Monday at 03:00 UTC
   workflow_dispatch:
 
 jobs:
-  build:
+  scrape:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.11
+          python-version: "3.10"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Rename last run's file so we can diff against it
+      - name: Prepare previous data for diff
+        run: |
+          if [ -f aitools.json ]; then
+            mv aitools.json aitools.json.old
+          fi
+
       - name: Run scraper
         run: python scraper.py
 
-      - name: Commit changes
+      - name: Create diff file
         run: |
-          git config --global user.name "Chuck"
-          git config --global user.email "your-email@example.com"
-          git add aitools.json
-          git commit -m "Updated data" || echo "No changes"
+          echo "Creating diff…"
+
+          # If no previous file, create empty diff
+          if [ ! -f aitools.json.old ]; then
+            echo '{"added": [], "removed": [], "updated": []}' > aitools-diff.json
+            exit 0
+          fi
+
+          python << 'EOF'
+import json, hashlib
+
+def load_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return []
+
+old = load_json("aitools.json.old")
+new = load_json("aitools.json")
+
+# Build index by URL
+old_map = {t.get("url"): t for t in old}
+new_map = {t.get("url"): t for t in new}
+
+added = [v for k,v in new_map.items() if k not in old_map]
+removed = [v for k,v in old_map.items() if k not in new_map]
+
+updated = []
+for url in set(old_map.keys()) & set(new_map.keys()):
+    old_item = old_map[url]
+    new_item = new_map[url]
+    changes = {}
+    for field in new_item:
+        if new_item[field] != old_item.get(field):
+            changes[field] = {"old": old_item.get(field), "new": new_item[field]}
+    if changes:
+        updated.append({"url": url, "changes": changes})
+
+diff = {
+    "added": added,
+    "removed": removed,
+    "updated": updated
+}
+
+with open("aitools-diff.json", "w", encoding="utf-8") as f:
+    json.dump(diff, f, indent=2, ensure_ascii=False)
+
+EOF
+
+      - name: Commit changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+          git add aitools.json aitools-diff.json
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Weekly scrape update"
           git push
+
