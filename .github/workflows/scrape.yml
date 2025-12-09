@@ -1,8 +1,11 @@
 name: Scrape AI Tools
 
 on:
+  # 🕒 Run automatically every Monday at 03:00 UTC
   schedule:
-    - cron: "0 3 * * 1"   # Runs every Monday at 03:00 UTC
+    - cron: "0 3 * * 1"
+
+  # ▶️ Allow manual runs from the Actions tab
   workflow_dispatch:
 
 jobs:
@@ -10,59 +13,81 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ----------------------------
+      # 1️⃣ Checkout repository
+      # ----------------------------
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
+      # ----------------------------
+      # 2️⃣ Set up Python environment
+      # ----------------------------
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
+      # ----------------------------
+      # 3️⃣ Install dependencies
+      # ----------------------------
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
 
-      # Rename last run's file so we can diff against it
+      # ----------------------------
+      # 4️⃣ Preserve previous dataset
+      # ----------------------------
       - name: Prepare previous data for diff
         run: |
           if [ -f aitools.json ]; then
             mv aitools.json aitools.json.old
           fi
 
+      # ----------------------------
+      # 5️⃣ Run scraper (stop on failure)
+      # ----------------------------
       - name: Run scraper
-        run: python scraper.py
+        run: |
+          set -e  # ⛔ Stop if scraper fails
+          python scraper.py
 
+      # ----------------------------
+      # 6️⃣ Generate diff file
+      # ----------------------------
       - name: Create diff file
         run: |
           echo "Creating diff…"
 
-          # If no previous file, create empty diff
+          # If no previous file exists, create an empty diff
           if [ ! -f aitools.json.old ]; then
             echo '{"added": [], "removed": [], "updated": []}' > aitools-diff.json
             exit 0
           fi
 
           python << 'EOF'
-import json, hashlib
+import json
 
 def load_json(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except Exception:
         return []
 
 old = load_json("aitools.json.old")
 new = load_json("aitools.json")
 
-# Build index by URL
+# Index data by URL for easy comparison
 old_map = {t.get("url"): t for t in old}
 new_map = {t.get("url"): t for t in new}
 
-added = [v for k,v in new_map.items() if k not in old_map]
-removed = [v for k,v in old_map.items() if k not in new_map]
+# Added / Removed
+added = [v for k, v in new_map.items() if k not in old_map]
+removed = [v for k, v in old_map.items() if k not in new_map]
 
+# Updated (content differences)
 updated = []
 for url in set(old_map.keys()) & set(new_map.keys()):
     old_item = old_map[url]
@@ -74,6 +99,7 @@ for url in set(old_map.keys()) & set(new_map.keys()):
     if changes:
         updated.append({"url": url, "changes": changes})
 
+# Save diff
 diff = {
     "added": added,
     "removed": removed,
@@ -83,8 +109,13 @@ diff = {
 with open("aitools-diff.json", "w", encoding="utf-8") as f:
     json.dump(diff, f, indent=2, ensure_ascii=False)
 
+print(f"Added: {len(added)}, Removed: {len(removed)}, Updated: {len(updated)}")
+
 EOF
 
+      # ----------------------------
+      # 7️⃣ Commit and push results
+      # ----------------------------
       - name: Commit changes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -94,6 +125,7 @@ EOF
 
           git add aitools.json aitools-diff.json
 
+          # Skip commit if nothing changed
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
@@ -101,4 +133,3 @@ EOF
 
           git commit -m "Weekly scrape update"
           git push
-
