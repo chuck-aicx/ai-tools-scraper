@@ -6,7 +6,7 @@ import re
 
 BASE_URL = "https://aitoolfor.org"
 
-# Categories to scrape
+# Categories to scrape (you can add more)
 CATEGORIES = [
     {"slug": "assistant", "url": f"{BASE_URL}/categories/assistant/"},
 ]
